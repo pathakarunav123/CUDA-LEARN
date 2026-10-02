@@ -1,0 +1,9 @@
+/build/
+/Release/
+/.vs/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib

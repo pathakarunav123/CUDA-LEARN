@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "build",
+			"path": "build"
+		}
+	],
+	"settings": {
+		"git.ignoreLimitWarning": true
+	}
+}
