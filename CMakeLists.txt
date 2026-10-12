@@ -12,6 +12,7 @@ add_executable(copyMat copyMat.cu)
 add_executable(matTranspose matTranspose.cu)
 add_executable(matMul matMul.cu)
 add_executable(Tiling Tiling.cu)
+add_executable(naiveVsTile naiveVsTile.cu)
 
 set_target_properties(vectorAdd PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
