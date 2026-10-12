@@ -29,43 +29,43 @@ __global__ void tiledMatMul(
 	float* C,
 	int M, int K, int N)
 {
-	int row = blockIdx.y * TILE + threadIdx.y;
-	int col = blockIdx.x * TILE + threadIdx.x;
+	const int row = blockIdx.y * TILE + threadIdx.y;
+	const int col = blockIdx.x * TILE + threadIdx.x;
 
 	__shared__ float As[TILE][TILE];
 	__shared__ float Bs[TILE][TILE];
 
 	float sum = 0.0f;
 
-	for (int t = 0; t < K / TILE; ++t)
-	{
-		As[threadIdx.y][threadIdx.x] =
-			A[row * K + t * TILE + threadIdx.x];
+	const int numTiles = (K + TILE - 1) / TILE;
 
+	for (int t = 0; t < numTiles; ++t)
+	{
+		const int aCol = t * TILE + threadIdx.x;
+		const int bRow = t * TILE + threadIdx.y;
+
+		As[threadIdx.y][threadIdx.x] =
+			(row < M && aCol < K) ? A[row * K + aCol] : 0.0f;
 		Bs[threadIdx.y][threadIdx.x] =
-			B[(t * TILE + threadIdx.y) * N + col];
+			(bRow < K && col < N) ? B[bRow * N + col] : 0.0f;
 
 		__syncthreads();
 
 		for (int k = 0; k < TILE; ++k)
-		{
-			sum += As[threadIdx.y][k] *
-				   Bs[k][threadIdx.x];
-		}
+			sum += As[threadIdx.y][k] * Bs[k][threadIdx.x];
 
 		__syncthreads();
 	}
 
-	C[row * N + col] = sum;
+	if (row < M && col < N)
+		C[row * N + col] = sum;
 }
 
 int main()
 {
-	constexpr int M = 32;
-	constexpr int K = 32;
-	constexpr int N = 32;
-	static_assert(M % TILE == 0 && K % TILE == 0 && N % TILE == 0,
-				  "Matrix dimensions must be divisible by TILE.");
+	constexpr int M = 35;
+	constexpr int K = 29;
+	constexpr int N = 23;
 
 	std::vector<float> h_A(M * K);
 	std::vector<float> h_B(K * N);
@@ -90,7 +90,7 @@ int main()
 	CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytesB, cudaMemcpyHostToDevice));
 
 	const dim3 threads(TILE, TILE);
-	const dim3 blocks(N / TILE, M / TILE);
+	const dim3 blocks((N + TILE - 1) / TILE, (M + TILE - 1) / TILE);
 	tiledMatMul<<<blocks, threads>>>(d_A, d_B, d_C, M, K, N);
 	CUDA_CHECK(cudaGetLastError());
 	CUDA_CHECK(cudaDeviceSynchronize());
@@ -114,10 +114,11 @@ int main()
 		}
 	}
 
-	for (int row = 0; row < 4; ++row)
+	for (int row = 0; row < 4 && row < M; ++row)
 	{
-		for (int col = 0; col < 4; ++col)
-			printf("%.1f%c", h_C[row * N + col], col == 3 ? '\n' : ' ');
+		for (int col = 0; col < 4 && col < N; ++col)
+			printf("%.1f%c", h_C[row * N + col],
+				   col == 3 || col == N - 1 ? '\n' : ' ');
 	}
 
 	CUDA_CHECK(cudaFree(d_A));
