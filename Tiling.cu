@@ -6,3 +6,127 @@
 //be done independently of each other. Note that not all data structures
 //can be partitioned into tiles given an arbitrary kernel function.
 
+#include <cuda_runtime.h>
+
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+#define CUDA_CHECK(call) do { \
+	cudaError_t err = (call); \
+	if (err != cudaSuccess) { \
+		fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+		exit(EXIT_FAILURE); \
+	} \
+} while (0)
+
+#define TILE 16
+
+__global__ void tiledMatMul(
+	const float* A,
+	const float* B,
+	float* C,
+	int M, int K, int N)
+{
+	int row = blockIdx.y * TILE + threadIdx.y;
+	int col = blockIdx.x * TILE + threadIdx.x;
+
+	__shared__ float As[TILE][TILE];
+	__shared__ float Bs[TILE][TILE];
+
+	float sum = 0.0f;
+
+	for (int t = 0; t < K / TILE; ++t)
+	{
+		As[threadIdx.y][threadIdx.x] =
+			A[row * K + t * TILE + threadIdx.x];
+
+		Bs[threadIdx.y][threadIdx.x] =
+			B[(t * TILE + threadIdx.y) * N + col];
+
+		__syncthreads();
+
+		for (int k = 0; k < TILE; ++k)
+		{
+			sum += As[threadIdx.y][k] *
+				   Bs[k][threadIdx.x];
+		}
+
+		__syncthreads();
+	}
+
+	C[row * N + col] = sum;
+}
+
+int main()
+{
+	constexpr int M = 32;
+	constexpr int K = 32;
+	constexpr int N = 32;
+	static_assert(M % TILE == 0 && K % TILE == 0 && N % TILE == 0,
+				  "Matrix dimensions must be divisible by TILE.");
+
+	std::vector<float> h_A(M * K);
+	std::vector<float> h_B(K * N);
+	std::vector<float> h_C(M * N, 0.0f);
+
+	for (int i = 0; i < M * K; ++i)
+		h_A[i] = static_cast<float>(i % 5 + 1);
+	for (int i = 0; i < K * N; ++i)
+		h_B[i] = static_cast<float>(i % 7 + 1);
+
+	const size_t bytesA = h_A.size() * sizeof(float);
+	const size_t bytesB = h_B.size() * sizeof(float);
+	const size_t bytesC = h_C.size() * sizeof(float);
+	float* d_A = nullptr;
+	float* d_B = nullptr;
+	float* d_C = nullptr;
+
+	CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_A), bytesA));
+	CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_B), bytesB));
+	CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_C), bytesC));
+	CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytesA, cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytesB, cudaMemcpyHostToDevice));
+
+	const dim3 threads(TILE, TILE);
+	const dim3 blocks(N / TILE, M / TILE);
+	tiledMatMul<<<blocks, threads>>>(d_A, d_B, d_C, M, K, N);
+	CUDA_CHECK(cudaGetLastError());
+	CUDA_CHECK(cudaDeviceSynchronize());
+	CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
+
+	bool valid = true;
+	for (int row = 0; row < M; ++row)
+	{
+		for (int col = 0; col < N; ++col)
+		{
+			float expected = 0.0f;
+			for (int k = 0; k < K; ++k)
+				expected += h_A[row * K + k] * h_B[k * N + col];
+
+			if (std::fabs(h_C[row * N + col] - expected) > 1e-5f)
+			{
+				fprintf(stderr, "Verification failed at C[%d][%d]: %.1f != %.1f\n",
+						row, col, h_C[row * N + col], expected);
+				valid = false;
+			}
+		}
+	}
+
+	for (int row = 0; row < 4; ++row)
+	{
+		for (int col = 0; col < 4; ++col)
+			printf("%.1f%c", h_C[row * N + col], col == 3 ? '\n' : ' ');
+	}
+
+	CUDA_CHECK(cudaFree(d_A));
+	CUDA_CHECK(cudaFree(d_B));
+	CUDA_CHECK(cudaFree(d_C));
+
+	if (!valid)
+		return EXIT_FAILURE;
+
+	printf("Tiled matrix multiplication successful.\n");
+	return EXIT_SUCCESS;
+}
